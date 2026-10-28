@@ -44,6 +44,9 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
-#backend
-
-/server/app/firebase-service-account.json
+# Backend credentials and Android signing keys (never commit private keys).
+/server/app/config.php
+/server/app/*service-account*.json
+/android/key.properties
+*.jks
+*.keystore
