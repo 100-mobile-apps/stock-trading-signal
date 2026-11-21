@@ -60,7 +60,7 @@ test -f /home/globacom/signallab/app/config.php && echo config-ok
 
 If `config.php` is missing, copy `config.sample.php` to `config.php` in the
 private `app/` folder and fill it in as described in step 5. Never put it in
-the public directory. Check `https://signalab.bulksend.top/` first; a JSON
+the public directory. Check `https://signalab.100apkgoals.com/` first; a JSON
 response confirms bootstrapping. Then check `/health`, which also requires
 the configured database and installed tables from step 6.
 

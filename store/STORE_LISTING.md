@@ -34,8 +34,8 @@ position size calculator · S&P 500 · Nasdaq · Tesla · Apple · NVIDIA
 - **Package name:** `com.swiftmynd.signal_lab`
 - **Category:** Finance · **Tags:** Stocks, Investing, Trading
 - **Contact email:** your support mailbox (the same one the server sends from)
-- **Privacy policy URL:** `https://signalab.bulksend.top/privacy` (served by your backend)
-- **Account deletion URL** (required for apps with accounts): `https://signalab.bulksend.top/delete-account`
+- **Privacy policy URL:** `https://signalab.100apkgoals.com/privacy` (served by your backend)
+- **Account deletion URL** (required for apps with accounts): `https://signalab.100apkgoals.com/delete-account`
 - **Content rating:** complete the questionnaire. No gambling or user-generated content; the app
   gives financial information.
 - **Financial features declaration:** choose *"My app doesn't provide any financial features"*

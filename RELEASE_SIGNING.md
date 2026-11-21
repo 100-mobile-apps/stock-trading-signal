@@ -39,7 +39,7 @@ keystore for this app. The release build reads `SIGNALLAB_UPLOAD_KEYSTORE` and
 
    flutter pub get
    flutter build appbundle --release `
-     --dart-define=API_BASE_URL=https://signalab.bulksend.top `
+     --dart-define=API_BASE_URL=https://signalab.100apkgoals.com `
      --dart-define=GOOGLE_SERVER_CLIENT_ID=222013884908-n9pn4sgjipl20s3ilk5ttcl4fmkri7mm.apps.googleusercontent.com
 
    Remove-Item Env:SIGNALLAB_UPLOAD_PASSWORD

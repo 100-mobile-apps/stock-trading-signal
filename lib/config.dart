@@ -3,7 +3,7 @@
 ///               --dart-define=GOOGLE_SERVER_CLIENT_ID=xxxx.apps.googleusercontent.com
 class AppConfig {
   /// Your cPanel API (the server/public folder), no trailing slash.
-  static const apiBaseUrl = String.fromEnvironment('API_BASE_URL', defaultValue: 'https://api.yourdomain.com');
+  static const apiBaseUrl = String.fromEnvironment('API_BASE_URL', defaultValue: 'https://signalab.100apkgoals.com');
 
   /// Google OAuth *Web* client ID. The server verifies ID tokens issued for it.
   static const googleServerClientId = String.fromEnvironment('GOOGLE_SERVER_CLIENT_ID', defaultValue: '');
