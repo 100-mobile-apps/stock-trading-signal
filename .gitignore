@@ -1,0 +1,10 @@
+.dart_tool/
+build/
+.flutter-plugins*
+server/app/config.php
+server/app/*service-account*.json
+server/app/storage/cache/*.json
+server/app/storage/gtoken_*.json
+*.jks
+*.keystore
+key.properties
