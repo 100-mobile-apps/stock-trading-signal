@@ -3,10 +3,12 @@
 return [
     'app_name' => 'Stock Trading Signals',
     'company'  => 'Swiftmynd Technologies Ltd',
-    // Public URL of the /public folder (no trailing slash), e.g. https://api.yourdomain.com
-    'base_url' => 'https://api.yourdomain.com',
-    // Where "Open app" buttons in emails point (website or store link).
-    'app_url'  => 'https://yourdomain.com',
+    // Website root (no trailing slash). The app's API is served at {base_url}/api
+    'base_url' => 'https://stocksignal.bulksend.top',
+    // Where "Open app" buttons in emails point.
+    'app_url'  => 'https://stocksignal.bulksend.top/app',
+    // Your Play Store listing (shown on the website).
+    'play_url' => 'https://play.google.com/store/apps/details?id=com.swiftmynd.signal_lab',
     'timezone' => 'UTC',
 
     'db' => [
@@ -44,8 +46,25 @@ return [
     // (the Web client ID used as serverClientId in the app, plus Android/iOS IDs).
     'google' => [
         'client_ids' => [
-            '222013884908-n9pn4sgjipl20s3ilk5ttcl4fmkri7mm.apps.googleusercontent.com',
+            'XXXXXXXX-xxxxxxxx.apps.googleusercontent.com',
         ],
+        // Web client ID for the "Continue with Google" button on the website (same Web client is fine;
+        // add https://stocksignal.bulksend.top to its Authorized JavaScript origins). Empty = hide button.
+        'web_client_id' => 'XXXXXXXX-xxxxxxxx.apps.googleusercontent.com',
+    ],
+
+    // Paystack (website payments). Dashboard → Settings → API Keys & Webhooks.
+    // Webhook URL: https://stocksignal.bulksend.top/paystack/webhook
+    'paystack' => [
+        'secret_key' => '',   // sk_live_...
+        'public_key' => '',   // pk_live_...
+    ],
+
+    // Google Play in-app subscriptions (Android). Create a service account with access to
+    // Play Console (Users & permissions → "View financial data" + "Manage orders"), upload its JSON here.
+    'play' => [
+        'package_name'         => 'com.swiftmynd.signal_lab',
+        'service_account_file' => __DIR__ . '/play-service-account.json',
     ],
 
     // Stocks the scanner always follows, plus every symbol on any user's watchlist.
@@ -65,7 +84,7 @@ return [
     // 'yahoo' in production. 'fake' is only for automated tests.
     'market' => ['provider' => 'yahoo'],
 
-    // Optional: lets you trigger cron scripts over HTTP (…/cron/scan?key=…) if your
+    // Optional: lets you trigger cron scripts over HTTP (…/api/cron/scan?key=…) if your
     // host has no CLI cron. Leave empty to disable.
     'cron_key' => '',
 ];

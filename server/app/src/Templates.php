@@ -31,6 +31,7 @@ final class Templates
 <tr><td style="font-size:15px;line-height:1.55;color:#334155">{$innerHtml}</td></tr>
 $btn
 </table></td></tr>
+<tr><td style="padding:14px 0 0"><div style="margin:18px 0 0;padding:12px 14px;border-radius:10px;background:#FEF3C7;color:#78350F;font-size:13px;line-height:1.5;text-align:left;margin:0">&#128233; <b>Never miss a signal:</b> if this email landed in Spam, Junk or Promotions, open it and tap <b>&ldquo;Not spam&rdquo;</b> (or move it to your Inbox), then add this sender to your contacts. Please check your spam folder regularly so signal emails keep reaching you.</div></td></tr>
 <tr><td style="padding:16px 8px;font-size:11.5px;line-height:1.5;color:#64748B">
 Signals are generated automatically by fixed rules for educational purposes and are not financial advice.
 Trading involves risk of loss. Past results do not guarantee future results.<br>
@@ -57,10 +58,18 @@ HTML;
             "Reset your password (valid 1 hour): $link", ['Choose a new password', $link]);
     }
 
-    public static function signalEmail(array $s, string $kind, string $title, string $body): array
+    public static function signalEmail(array $s, string $kind, string $title, string $body, bool $locked = false): array
     {
         $rows = [];
         $p = fn($k) => Fmt::price((float) $s[$k]);
+        if ($kind === 'new_buy' && $locked) {
+            $rows = [['Entry / stop / targets', '🔒 Premium'], ['Strength', $s['strength'] . '/4'],
+                ['Timeframe', $s['tf'] === '1d' ? 'Daily (swing)' : 'Hourly (intraday)'], ['Signal time', Fmt::date($s['signal_time'], true)]];
+            $text = "$title\n$body\n" . implode("\n", array_map(fn($r) => "$r[0]: $r[1]", $rows));
+            $html = Fmt::e($body) . self::kvTable($rows)
+                . '<p style="margin:14px 0 0;font-size:13px;color:#64748B">Win/loss results for every signal stay free. See our full public track record before you decide.</p>';
+            return self::email(Fmt::e($title), $html, $text, ['See Premium plans', Urls::site('/pricing')]);
+        }
         if ($kind === 'new_buy') {
             $rows = [['Entry (reference)', $p('signal_price')], ['Stop-loss', $p('stop_loss')], ['Target 1', $p('target1')],
                 ['Target 2', $p('target2')], ['Strength', $s['strength'] . '/4'], ['Timeframe', $s['tf'] === '1d' ? 'Daily (swing)' : 'Hourly (intraday)'],
@@ -69,15 +78,7 @@ HTML;
             $rows = [['Entry', $p('entry_price') . ' · ' . Fmt::date($s['entry_time'])], ['Exit', $p('exit_price') . ' · ' . Fmt::date($s['exit_time'])],
                 ['Result', Fmt::pct((float) $s['return_pct']) . ' · ' . Fmt::r((float) $s['r_multiple'])], ['Held', $s['bars_held'] . ' bars']];
         }
-        $table = '';
-        if ($rows) {
-            $table = '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:14px;border-top:1px solid #E2E8F0">';
-            foreach ($rows as [$k, $v]) {
-                $table .= '<tr><td style="padding:9px 0;border-bottom:1px solid #E2E8F0;color:#64748B">' . Fmt::e($k)
-                    . '</td><td align="right" style="padding:9px 0;border-bottom:1px solid #E2E8F0;font-weight:700">' . Fmt::e($v) . '</td></tr>';
-            }
-            $table .= '</table>';
-        }
+        $table = self::kvTable($rows);
         $reasons = '';
         if ($kind === 'new_buy') {
             $list = json_decode((string) $s['reasons'], true) ?: [];
@@ -87,6 +88,17 @@ HTML;
         }
         $text = "$title\n$body\n" . implode("\n", array_map(fn($r) => "$r[0]: $r[1]", $rows));
         return self::email(Fmt::e($title), Fmt::e($body) . $table . $reasons, $text, ['Open in app', (string) Config::get('app_url')]);
+    }
+
+    private static function kvTable(array $rows): string
+    {
+        if (!$rows) return '';
+        $table = '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:14px;border-top:1px solid #E2E8F0">';
+        foreach ($rows as [$k, $v]) {
+            $table .= '<tr><td style="padding:9px 0;border-bottom:1px solid #E2E8F0;color:#64748B">' . Fmt::e($k)
+                . '</td><td align="right" style="padding:9px 0;border-bottom:1px solid #E2E8F0;font-weight:700">' . Fmt::e($v) . '</td></tr>';
+        }
+        return $table . '</table>';
     }
 
     public static function reportEmail(string $name, string $period, string $label, array $d): array
@@ -134,7 +146,7 @@ HTML;
             ucfirst($period), $label, $o['trades'], $o['wins'], Fmt::r((float) $o['total_r']), $d['issued'],
             $a['trades'], $a['win_rate'], Fmt::r((float) $a['total_r']));
         return self::email(ucfirst($period) . ' report · ' . Fmt::e($label), $html, $text,
-            ['View full track record', rtrim((string) Config::get('base_url'), '/') . '/record']);
+            ['View full track record', Urls::site('/record')]);
     }
 
     /** "Chat with the developer · Buy me a coffee" footer links (from config.developer). */
@@ -203,24 +215,19 @@ HTML;
     public static function privacyPage(): string
     {
         $app = Fmt::e((string) Config::get('app_name', 'Stock Trading Signals'));
-        $company = Fmt::e((string) Config::get('company', $app));
         $from = Fmt::e((string) Config::get('mail.from', ''));
         $base = Fmt::e(rtrim((string) Config::get('base_url'), '/'));
         $sections = [
-            ['About this policy', "$app is operated by $company. This policy covers the app and our website and API at $base. The service provides educational stock-market information, not brokerage accounts or custody of funds."],
-            ['Account information', 'When you register, we receive your name and email address and store a hash of your password, not the password itself. If you use Google Sign-In, we receive your Google email address and account identifier, your name if provided, and verify your sign-in token with Google. We store account creation, verification and last-login times.'],
-            ['Settings and alerts', 'We store your watchlist, trading-style and risk settings (including an account-size figure you enter, not a linked bank balance), notification choices, the alerts sent to your account and whether they were read or delivered. If you enable push notifications, we store your Firebase device token to send alerts. Our servers also keep queued email content and delivery status.'],
-            ['Technical and local data', 'For security and troubleshooting, we record IP addresses, email addresses and times for failed sign-ins and password-reset requests. Your device or browser stores sign-in tokens and small local preferences such as whether you completed the introduction and setup. Requests to our hosting provider may also generate standard server logs.'],
-            ['Why we use this data', 'We use this information to create and secure your account, remember your settings, follow watchlist symbols, deliver the signals, results and reports you request, prevent abuse and respond to support or deletion requests. We do not sell personal information, display ads or include advertising or analytics SDKs in the app.'],
-            ['Market data and public results', 'The app and server request stock prices from Yahoo Finance using ticker symbols; the provider may also receive standard connection information such as an IP address. Our public track-record page shows aggregate trading signals and results, not your identity or personal watchlist.'],
-            ['Service providers and external links', 'Google provides Google Sign-In, token verification and Firebase Cloud Messaging for push notifications. Our hosting and email providers process data needed to operate the API and deliver messages. The app may load fonts from Google Fonts. WhatsApp, Buy Me a Coffee and Google Play links open external services only when you choose them; their privacy policies then apply. Providers may process data in other countries.'],
-            ['Security', 'The app uses HTTPS to communicate with our API. Passwords are hashed, refresh tokens are stored as hashes on the server, and the mobile app uses platform-protected storage for sign-in tokens. Browser storage depends on your browser. No internet service or storage method can be guaranteed completely secure.'],
-            ['Retention and deletion', "Account-linked settings, watchlists, devices, sessions and alert history are deleted when you delete your account. You can delete it in the app under Settings > Account > Delete account. Password-account users can also use <a href=\"$base/delete-account\" style=\"color:#14B8A6\">$base/delete-account</a>; Google-only account holders can use the app or contact us. Some records are not linked for automatic deletion, including login-attempt records, queued or sent emails, server logs and backups. These may remain for security, operations or legal obligations; contact us about any remaining personal information. Market-wide signal history and anonymous aggregate results are not deleted with an individual account."],
-            ['Your choices and requests', 'You can update your watchlist, settings and alert preferences in the app, disable push notifications in your device settings, and request access to, correction of or deletion of your personal information by contacting us. We may need to verify your identity before handling a request.'],
-            ['Children and updates', "$app is not intended for anyone under 18. We may update this policy as the service changes; the date shown at the top identifies the current version."],
-            ['Contact', $from !== '' ? "Privacy questions or requests: <a href=\"mailto:$from\" style=\"color:#14B8A6\">$from</a>" : 'Contact us through the app for privacy questions or requests.'],
+            ['What we collect', "Your name and email address (or the name and email of your Google account if you use Google sign-in), a securely hashed password, your risk settings, watchlist and notification preferences, the alerts we sent you, and a push-notification token for each device you sign in on."],
+            ['How we use it', "Only to provide the service: to sign you in, scan the stocks on your watchlist, send push and email alerts and performance reports, and show your results. We do not sell or rent your data, show ads, or use advertising or tracking SDKs."],
+            ['Third parties', "Push notifications are delivered through Google Firebase Cloud Messaging. Google Sign-In is provided by Google. Market prices are requested from Yahoo Finance using only ticker symbols. Emails are sent from our own mail server."],
+            ['Storage & security', "Data is stored on our server and transmitted over encrypted HTTPS. Passwords are hashed and never stored in plain text. On your phone, sign-in tokens are kept in the device's secure storage."],
+            ['Retention & deletion', "We keep your data while your account exists. You can delete your account at any time in the app (Settings → Account → Delete account) or at <a href=\"$base/delete-account\" style=\"color:#14B8A6\">$base/delete-account</a>. Deletion permanently erases your account, settings, watchlist, devices and alert history."],
+            ['Who we are', $app . ' is developed and operated by ' . Fmt::e((string) Config::get('company', $app)) . '.'],
+            ['Children', "$app is not intended for anyone under 18."],
+            ['Contact', $from !== '' ? "Questions about privacy: <a href=\"mailto:$from\" style=\"color:#14B8A6\">$from</a>" : 'Contact us through the app.'],
         ];
-        $h = '<div class="card"><h1>Privacy policy</h1><p class="small">Last updated 11 October 2026</p>';
+        $h = '<div class="card"><h1>Privacy policy</h1><p class="small">Last updated ' . date('j F Y') . '</p>';
         foreach ($sections as [$t, $b]) $h .= '<h2 style="margin-top:22px">' . Fmt::e($t) . '</h2><p>' . $b . '</p>';
         return self::page('Privacy policy', $h . '</div>');
     }

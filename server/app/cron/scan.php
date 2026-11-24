@@ -6,12 +6,8 @@ require __DIR__ . '/../bootstrap.php';
 
 use SignalLab\Tracker;
 
-$lock = @fopen(__DIR__ . '/../storage/scan.lock', 'c');
-if ($lock === false) {
-    fwrite(STDERR, "Cannot open app/storage/scan.lock. Check that app/storage exists and is writable.\n");
-    exit(1);
-}
-if (!flock($lock, LOCK_EX | LOCK_NB)) {
+$lock = fopen(__DIR__ . '/../storage/scan.lock', 'c');
+if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) {
     echo "Another scan is running.\n";
     exit(0);
 }

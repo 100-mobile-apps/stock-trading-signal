@@ -14,8 +14,8 @@ echo "Stock Trading Signals setup check\n";
 try {
     Db::pdo();
     $ok('Database connection');
-    Db::pdo()->exec((string) file_get_contents(__DIR__ . '/../sql/schema.sql'));
-    $ok('Tables created / up to date');
+    $changes = SignalLab\Migrator::run();
+    $ok('Tables created / up to date' . ($changes ? ' (added: ' . implode(', ', $changes) . ')' : ''));
 } catch (Throwable $e) {
     $bad('Database: ' . $e->getMessage());
     exit(1);
@@ -29,10 +29,21 @@ is_file((string) Config::get('fcm.service_account_file')) ? $ok('Firebase servic
 Config::get('google.client_ids.0') && !str_contains((string) Config::get('google.client_ids.0'), 'XXXX')
     ? $ok('Google client ID configured') : $bad('Add your Google OAuth client ID(s) for Google sign-in');
 
+if (($argv[1] ?? '') === '--make-admin' && !empty($argv[2])) {
+    $n = Db::exec("UPDATE users SET role = 'admin' WHERE email = ?", [strtolower(trim($argv[2]))]);
+    $n ? $ok("{$argv[2]} is now an admin: sign in at " . SignalLab\Urls::site('/admin'))
+       : $bad("No account with email {$argv[2]}. Sign up on the website first, then re-run.");
+    exit(0);
+}
+Config::get('paystack.secret_key') ? $ok('Paystack configured (web payments enabled)') : $bad('Paystack secret key missing: web checkout disabled');
+is_file((string) Config::get('play.service_account_file')) ? $ok('Google Play service account found (in-app purchases verified)')
+    : $bad('Google Play service account JSON missing: in-app purchases cannot be verified');
+
 if (($argv[1] ?? '') === '--test-email' && !empty($argv[2])) {
     SignalLab\Mailer::queue($argv[2], 'Stock Trading Signals test email', SignalLab\Templates::email('It works', 'Email delivery from your server is working.', 'Email delivery works.'));
     [$s, $f] = SignalLab\Mailer::processQueue(5);
     $s ? $ok("Test email sent to {$argv[2]}") : $bad('Test email failed: ' . Db::value('SELECT last_error FROM email_queue ORDER BY id DESC LIMIT 1'));
 } else {
     echo "  · Tip: php app/cron/install.php --test-email you@example.com\n";
+    echo "  · Make yourself admin: php app/cron/install.php --make-admin you@example.com\n";
 }

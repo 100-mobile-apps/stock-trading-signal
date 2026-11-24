@@ -89,6 +89,7 @@ final class Tracker
             foreach (Engine::signals($C) as $sig) {
                 $isNew = $prev === null ? $sig['t'] === $lastBar : $sig['t'] > $prev;
                 if (!$isNew) continue;
+                if (!self::tradeAllowed($tf, $sig)) continue;
                 $id = self::record($sym, $tf, $sig);
                 if ($id === null) continue;
                 $new++;
@@ -108,6 +109,37 @@ final class Tracker
                 'last_error' => 'Not enough history yet'], 'symbol = ? AND tf = ?', [$sym, $tf]);
         }
         return ['new' => $new, 'closed' => $closed];
+    }
+
+    /**
+     * Quality filter for NEW signals (added 2026-11-24 after a backtest of 31 stocks):
+     *  - only timeframes in universe.trade_timeframes (1h lost money under every rule set tested),
+     *  - buys need strength >= signals.min_strength,
+     *  - buys only while SPY closes above its 200-period EMA on the same timeframe (market uptrend).
+     * Open trades on other timeframes are still tracked to their result.
+     */
+    private static function tradeAllowed(string $tf, array $sig): bool
+    {
+        if (!Config::get('signals.quality_filter', true)) return true; // tests run the raw engine
+        if (!in_array($tf, (array) Config::get('universe.trade_timeframes', ['1d']), true)) return false;
+        if (!$sig['buy']) return true;
+        if ($sig['strength'] < (int) Config::get('signals.min_strength', 3)) return false;
+        static $regime = [];
+        if (!array_key_exists($tf, $regime)) {
+            try {
+                $spy = Market::fetch('SPY', $tf)['candles'];
+                $e = Engine::ema(array_column($spy, 'c'), 200);
+                $regime[$tf] = [$spy, $e];
+            } catch (\Throwable $x) { $regime[$tf] = null; }
+        }
+        if ($regime[$tf] === null) return false; // no market data: stay out
+        [$spy, $e] = $regime[$tf];
+        $up = null;
+        foreach ($spy as $i => $c) {
+            if ($c['t'] > $sig['t']) break;
+            if ($e[$i] !== null) $up = $c['c'] > $e[$i];
+        }
+        return $up === true;
     }
 
     /** Inserts a signal. Returns null if it already exists or a trade is already running. */

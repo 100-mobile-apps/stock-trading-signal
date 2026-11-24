@@ -5,6 +5,9 @@ namespace SignalLab;
 
 final class HttpClient
 {
+    /** Tests: fn(string $method, string $url, ?string $body, array $headers): ?array{status:int, body:string}. */
+    public static $mock = null;
+
     /** @return array{status:int, body:string} */
     public static function get(string $url, array $headers = [], int $timeout = 20): array
     {
@@ -19,6 +22,10 @@ final class HttpClient
 
     private static function request(string $method, string $url, ?string $body, array $headers, int $timeout): array
     {
+        if (is_callable(self::$mock)) {
+            $r = (self::$mock)($method, $url, $body, $headers);
+            if ($r !== null) return $r;
+        }
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
