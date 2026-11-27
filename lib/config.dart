@@ -6,7 +6,7 @@ class AppConfig {
   static const apiBaseUrl = String.fromEnvironment('API_BASE_URL', defaultValue: 'https://signalab.100apkgoals.com');
 
   /// Google OAuth *Web* client ID. The server verifies ID tokens issued for it.
-  static const googleServerClientId = String.fromEnvironment('GOOGLE_SERVER_CLIENT_ID', defaultValue: '');
+  static const googleServerClientId = String.fromEnvironment('GOOGLE_SERVER_CLIENT_ID', defaultValue: '1051423328418-f01aqnh3h6c0fto30c80an0aorrhtgn4.apps.googleusercontent.com');
 
   static String get publicRecordUrl => '$apiBaseUrl/record';
 
