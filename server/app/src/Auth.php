@@ -51,15 +51,20 @@ final class Auth
             throw new ApiError(401, 'unauthorized', 'Please sign in.');
         }
         $id = (int) $claims['sub'];
-        if (!Db::value('SELECT id FROM users WHERE id = ?', [$id])) {
-            throw new ApiError(401, 'unauthorized', 'Account not found.');
-        }
+        $status = Db::value('SELECT status FROM users WHERE id = ?', [$id]);
+        if ($status === null) throw new ApiError(401, 'unauthorized', 'Account not found.');
+        if ($status === 'suspended') throw new ApiError(403, 'suspended', 'This account has been suspended. Contact support.');
         return $id;
     }
 
     // ------------------------------------------------------------ accounts
 
-    public static function register(string $email, string $password, string $name, string $ip): array
+    public static function register(string $email, string $password, string $name, string $ip, ?string $referral = null, string $source = 'app'): array
+    {
+        return self::issueTokens(self::createUser($email, $password, $name, $ip, $referral, $source));
+    }
+
+    public static function createUser(string $email, string $password, string $name, string $ip, ?string $referral = null, string $source = 'app'): int
     {
         $email = self::normalizeEmail($email);
         self::validatePassword($password);
@@ -71,18 +76,26 @@ final class Auth
             'email' => $email,
             'password_hash' => password_hash($password, PASSWORD_DEFAULT),
             'name' => mb_substr($name, 0, 120),
+            'signup_source' => $source === 'web' ? 'web' : 'app',
             'created_at' => Db::now(),
         ]);
         self::ensureSettings($id);
+        Affiliates::attribute($id, $referral);
         self::sendVerification($id);
-        return self::issueTokens($id);
+        return $id;
     }
 
     public static function login(string $email, string $password, string $ip): array
     {
+        return self::issueTokens(self::checkPassword($email, $password, $ip));
+    }
+
+    /** Verifies email + password and returns the user id (used by the app API and the website). */
+    public static function checkPassword(string $email, string $password, string $ip): int
+    {
         $email = self::normalizeEmail($email);
         self::throttle($ip, $email);
-        $u = Db::one('SELECT id, password_hash FROM users WHERE email = ?', [$email]);
+        $u = Db::one('SELECT id, password_hash, status FROM users WHERE email = ?', [$email]);
         if (!$u || !$u['password_hash'] || !password_verify($password, $u['password_hash'])) {
             Db::insert('login_attempts', ['ip' => $ip, 'email' => $email, 'attempted_at' => Db::now()]);
             if ($u && !$u['password_hash']) {
@@ -90,17 +103,24 @@ final class Auth
             }
             throw new ApiError(401, 'invalid_credentials', 'Email or password is incorrect.');
         }
+        if ($u['status'] === 'suspended') throw new ApiError(403, 'suspended', 'This account has been suspended. Contact support.');
         if (password_needs_rehash($u['password_hash'], PASSWORD_DEFAULT)) {
             Db::exec('UPDATE users SET password_hash = ? WHERE id = ?', [password_hash($password, PASSWORD_DEFAULT), $u['id']]);
         }
-        return self::issueTokens((int) $u['id']);
+        return (int) $u['id'];
     }
 
     /**
      * Signs in with a Google ID token from the app. The token is verified by
      * Google's tokeninfo endpoint and must be issued for one of our client IDs.
      */
-    public static function google(string $idToken, ?callable $verifier = null): array
+    public static function google(string $idToken, ?callable $verifier = null, ?string $referral = null, string $source = 'app'): array
+    {
+        return self::issueTokens(self::googleUser($idToken, $verifier, $referral, $source));
+    }
+
+    /** Verifies a Google ID token and returns the (possibly new) user id. */
+    public static function googleUser(string $idToken, ?callable $verifier = null, ?string $referral = null, string $source = 'app'): int
     {
         $info = ($verifier ?? [self::class, 'verifyGoogleToken'])($idToken);
         $aud = (string) ($info['aud'] ?? '');
@@ -119,6 +139,9 @@ final class Auth
         $u = Db::one('SELECT id, google_sub, email_verified_at FROM users WHERE google_sub = ? OR email = ? ORDER BY google_sub = ? DESC LIMIT 1', [$sub, $email, $sub]);
         if ($u) {
             $id = (int) $u['id'];
+            if (Db::value('SELECT status FROM users WHERE id = ?', [$id]) === 'suspended') {
+                throw new ApiError(403, 'suspended', 'This account has been suspended. Contact support.');
+            }
             Db::exec('UPDATE users SET google_sub = ?, email_verified_at = COALESCE(email_verified_at, ?) WHERE id = ?', [$sub, Db::now(), $id]);
         } else {
             $id = Db::insert('users', [
@@ -126,11 +149,13 @@ final class Auth
                 'name' => mb_substr((string) ($info['name'] ?? ''), 0, 120),
                 'google_sub' => $sub,
                 'email_verified_at' => Db::now(),
+                'signup_source' => $source === 'web' ? 'web' : 'app',
                 'created_at' => Db::now(),
             ]);
             self::ensureSettings($id);
+            Affiliates::attribute($id, $referral);
         }
-        return self::issueTokens($id);
+        return $id;
     }
 
     public static function verifyGoogleToken(string $idToken): array
@@ -147,7 +172,7 @@ final class Auth
         $u = Db::one('SELECT email, name, email_verified_at FROM users WHERE id = ?', [$userId]);
         if (!$u || $u['email_verified_at']) return;
         $token = self::emailToken($userId, 'verify', 60 * 60 * 48);
-        $link = rtrim((string) Config::get('base_url'), '/') . '/auth/verify?token=' . $token;
+        $link = Urls::site('/verify?token=') . $token;
         Mailer::queue($u['email'], 'Confirm your email for ' . Config::get('app_name'), Templates::verifyEmail($u['name'], $link));
     }
 
@@ -167,7 +192,7 @@ final class Auth
         $u = Db::one('SELECT id, name FROM users WHERE email = ?', [$email]);
         if (!$u) return; // Don't reveal whether the email exists.
         $token = self::emailToken((int) $u['id'], 'reset', 60 * 60);
-        $link = rtrim((string) Config::get('base_url'), '/') . '/auth/reset?token=' . $token;
+        $link = Urls::site('/reset?token=') . $token;
         Mailer::queue($email, 'Reset your ' . Config::get('app_name') . ' password', Templates::resetEmail($u['name'], $link));
     }
 
@@ -201,7 +226,7 @@ final class Auth
 
     public static function userPayload(int $id): array
     {
-        $u = Db::one('SELECT id, email, name, google_sub, password_hash, email_verified_at, created_at FROM users WHERE id = ?', [$id]);
+        $u = Db::one('SELECT id, email, name, google_sub, password_hash, email_verified_at, created_at, role FROM users WHERE id = ?', [$id]);
         return [
             'id' => (int) $u['id'],
             'email' => $u['email'],
@@ -210,6 +235,9 @@ final class Auth
             'has_password' => $u['password_hash'] !== null,
             'google_linked' => $u['google_sub'] !== null,
             'created_at' => Fmt::iso($u['created_at']),
+            'is_admin' => $u['role'] === 'admin',
+            'referral_code' => Affiliates::codeFor($id),
+            'premium' => Premium::status($id),
         ];
     }
 

@@ -183,3 +183,172 @@ CREATE TABLE IF NOT EXISTS scan_log (
   closed       SMALLINT UNSIGNED NOT NULL DEFAULT 0,
   errors       TEXT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ===================================================================
+-- Premium, payments, affiliates, brokers, admin (v2)
+-- Extra columns on users are added by src/Migrator.php (install.php).
+-- ===================================================================
+
+CREATE TABLE IF NOT EXISTS settings (
+  k  VARCHAR(64) PRIMARY KEY,
+  v  TEXT NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS plans (
+  id                 INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  code               VARCHAR(32) NOT NULL UNIQUE,
+  name               VARCHAR(80) NOT NULL,
+  interval_months    TINYINT UNSIGNED NOT NULL,
+  price_usd          DECIMAL(10,2) NOT NULL,
+  price_ngn          DECIMAL(12,2) NOT NULL,
+  google_product_id  VARCHAR(100) NOT NULL DEFAULT '',
+  badge              VARCHAR(40) NOT NULL DEFAULT '',
+  active             TINYINT(1) NOT NULL DEFAULT 1,
+  sort               SMALLINT NOT NULL DEFAULT 0
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS payments (
+  id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id       INT UNSIGNED NULL,
+  provider      ENUM('paystack','google','manual') NOT NULL,
+  provider_ref  VARCHAR(120) NOT NULL UNIQUE,
+  plan_id       INT UNSIGNED NULL,
+  amount        DECIMAL(12,2) NOT NULL,
+  currency      VARCHAR(3) NOT NULL,
+  amount_usd    DECIMAL(10,2) NOT NULL DEFAULT 0,
+  status        ENUM('pending','success','failed','refunded') NOT NULL DEFAULT 'pending',
+  period_end    DATETIME NULL,
+  meta          TEXT NULL,
+  created_at    DATETIME NOT NULL,
+  updated_at    DATETIME NOT NULL,
+  KEY idx_pay_user (user_id),
+  KEY idx_pay_status (status, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS google_subscriptions (
+  id               INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id          INT UNSIGNED NOT NULL,
+  token_hash       CHAR(64) NOT NULL UNIQUE,
+  purchase_token   TEXT NOT NULL,
+  product_id       VARCHAR(100) NOT NULL,
+  latest_order_id  VARCHAR(120) NOT NULL DEFAULT '',
+  state            VARCHAR(60) NOT NULL DEFAULT '',
+  expiry_time      DATETIME NULL,
+  auto_renewing    TINYINT(1) NOT NULL DEFAULT 0,
+  last_checked_at  DATETIME NOT NULL,
+  created_at       DATETIME NOT NULL,
+  KEY idx_gs_user (user_id),
+  CONSTRAINT fk_gs_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS affiliates (
+  user_id          INT UNSIGNED PRIMARY KEY,
+  status           ENUM('pending','approved','rejected','suspended') NOT NULL DEFAULT 'pending',
+  commission_rate  DECIMAL(5,2) NULL,
+  payout_method    VARCHAR(20) NOT NULL DEFAULT '',
+  payout_details   TEXT NULL,
+  promo_plan       VARCHAR(500) NOT NULL DEFAULT '',
+  admin_note       VARCHAR(255) NOT NULL DEFAULT '',
+  applied_at       DATETIME NOT NULL,
+  approved_at      DATETIME NULL,
+  CONSTRAINT fk_aff_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS referral_clicks (
+  id                 INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  affiliate_user_id  INT UNSIGNED NOT NULL,
+  ip_hash            CHAR(64) NOT NULL,
+  landing            VARCHAR(190) NOT NULL DEFAULT '',
+  created_at         DATETIME NOT NULL,
+  KEY idx_rc_aff (affiliate_user_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS payouts (
+  id                 INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  affiliate_user_id  INT UNSIGNED NOT NULL,
+  amount_usd         DECIMAL(10,2) NOT NULL,
+  method             VARCHAR(20) NOT NULL,
+  details            TEXT NULL,
+  status             ENUM('requested','paid','rejected') NOT NULL DEFAULT 'requested',
+  txn_ref            VARCHAR(120) NOT NULL DEFAULT '',
+  admin_note         VARCHAR(255) NOT NULL DEFAULT '',
+  requested_at       DATETIME NOT NULL,
+  processed_at       DATETIME NULL,
+  KEY idx_po_aff (affiliate_user_id),
+  KEY idx_po_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS brokers (
+  id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  slug          VARCHAR(60) NOT NULL UNIQUE,
+  name          VARCHAR(100) NOT NULL,
+  logo_url      VARCHAR(255) NOT NULL DEFAULT '',
+  tagline       VARCHAR(160) NOT NULL DEFAULT '',
+  description   TEXT NULL,
+  url_template  VARCHAR(500) NOT NULL,
+  min_deposit   VARCHAR(40) NOT NULL DEFAULT '',
+  regions       VARCHAR(120) NOT NULL DEFAULT '',
+  active        TINYINT(1) NOT NULL DEFAULT 1,
+  sort          SMALLINT NOT NULL DEFAULT 0,
+  created_at    DATETIME NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS broker_clicks (
+  id                 INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  broker_id          INT UNSIGNED NOT NULL,
+  user_id            INT UNSIGNED NULL,
+  affiliate_user_id  INT UNSIGNED NULL,
+  sub_id             VARCHAR(40) NOT NULL UNIQUE,
+  source             VARCHAR(10) NOT NULL DEFAULT 'web',
+  ip_hash            CHAR(64) NOT NULL,
+  created_at         DATETIME NOT NULL,
+  KEY idx_bc_broker (broker_id, created_at),
+  KEY idx_bc_aff (affiliate_user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS commissions (
+  id                 INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  affiliate_user_id  INT UNSIGNED NOT NULL,
+  referred_user_id   INT UNSIGNED NULL,
+  source             ENUM('premium','broker','adjustment') NOT NULL,
+  payment_id         INT UNSIGNED NULL,
+  broker_id          INT UNSIGNED NULL,
+  broker_click_id    INT UNSIGNED NULL,
+  base_usd           DECIMAL(10,2) NOT NULL,
+  rate               DECIMAL(5,2) NOT NULL,
+  amount_usd         DECIMAL(10,2) NOT NULL,
+  status             ENUM('pending','approved','paid','reversed','rejected') NOT NULL DEFAULT 'pending',
+  available_at       DATETIME NOT NULL,
+  payout_id          INT UNSIGNED NULL,
+  note               VARCHAR(255) NOT NULL DEFAULT '',
+  created_at         DATETIME NOT NULL,
+  UNIQUE KEY uq_comm_payment (payment_id, affiliate_user_id),
+  KEY idx_comm_aff (affiliate_user_id, status),
+  KEY idx_comm_status (status, available_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS admin_log (
+  id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  admin_id    INT UNSIGNED NOT NULL,
+  action      VARCHAR(60) NOT NULL,
+  target      VARCHAR(120) NOT NULL DEFAULT '',
+  details     TEXT NULL,
+  ip          VARCHAR(45) NOT NULL DEFAULT '',
+  created_at  DATETIME NOT NULL,
+  KEY idx_al_time (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Website sessions (cookie holds a random id; only its hash is stored)
+CREATE TABLE IF NOT EXISTS web_sessions (
+  id_hash     CHAR(64) PRIMARY KEY,
+  user_id     INT UNSIGNED NULL,
+  csrf        CHAR(32) NOT NULL,
+  data        TEXT NOT NULL,
+  ip          VARCHAR(45) NOT NULL DEFAULT '',
+  user_agent  VARCHAR(190) NOT NULL DEFAULT '',
+  created_at  DATETIME NOT NULL,
+  last_seen   DATETIME NOT NULL,
+  expires_at  DATETIME NOT NULL,
+  KEY idx_ws_user (user_id),
+  KEY idx_ws_exp (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

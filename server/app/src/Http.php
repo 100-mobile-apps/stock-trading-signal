@@ -18,7 +18,25 @@ final class Response
         public readonly int $status,
         public readonly string $body,
         public readonly string $contentType = 'application/json; charset=utf-8',
+        public array $headers = [],
     ) {}
+
+    public static function redirect(string $url, int $status = 303): self
+    {
+        return new self($status, '', 'text/html; charset=utf-8', ['Location' => $url]);
+    }
+
+    public static function text(string $body, string $type = 'text/plain; charset=utf-8'): self
+    {
+        return new self(200, $body, $type);
+    }
+
+    /** Adds a header (Set-Cookie may repeat, so values are lists). */
+    public function with(string $name, string $value): self
+    {
+        $this->headers[$name] = isset($this->headers[$name]) ? array_merge((array) $this->headers[$name], [$value]) : $value;
+        return $this;
+    }
 
     public static function json(mixed $data, int $status = 200): self
     {
@@ -45,7 +63,26 @@ final class Request
         public readonly array $body,
         public readonly array $headers,
         public readonly string $ip,
-    ) {}
+        public array $cookies = [],
+    ) {
+        if (!$this->cookies && isset($this->headers['cookie'])) {
+            foreach (explode(';', (string) $this->headers['cookie']) as $pair) {
+                $kv = explode('=', trim($pair), 2);
+                if (count($kv) === 2) $this->cookies[$kv[0]] = urldecode($kv[1]);
+            }
+        }
+    }
+
+    public function withPath(string $path): self
+    {
+        return new self($this->method, $path, $this->query, $this->body, $this->headers, $this->ip, $this->cookies);
+    }
+
+    public function cookie(string $name): ?string
+    {
+        $v = $this->cookies[$name] ?? null;
+        return is_string($v) ? $v : null;
+    }
 
     public static function fromGlobals(): self
     {
@@ -106,6 +143,8 @@ final class Router
 {
     /** @var array<int, array{string, string, callable}> */
     private array $routes = [];
+    /** Optional fn(int $status, string $code, string $message, Request $req): Response, used by the website for HTML errors. */
+    public $onError = null;
 
     public function add(string $method, string $pattern, callable $handler): void
     {
@@ -125,26 +164,45 @@ final class Router
             try {
                 return $handler($req, $params);
             } catch (ApiError $e) {
-                return Response::error($e->status, $e->codeName, $e->getMessage());
+                return $this->fail($e->status, $e->codeName, $e->getMessage(), $req);
             } catch (\Throwable $e) {
                 error_log('[SignalLab] ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine());
-                return Response::error(500, 'server_error', 'Something went wrong. Please try again.');
+                return $this->fail(500, 'server_error', 'Something went wrong. Please try again.', $req);
             }
         }
         return $allowed
-            ? Response::error(405, 'method_not_allowed', 'Method not allowed.')
-            : Response::error(404, 'not_found', 'Endpoint not found.');
+            ? $this->fail(405, 'method_not_allowed', 'Method not allowed.', $req)
+            : $this->fail(404, 'not_found', 'Page not found.', $req);
+    }
+
+    private function fail(int $status, string $code, string $message, Request $req): Response
+    {
+        return $this->onError ? ($this->onError)($status, $code, $message, $req) : Response::error($status, $code, $message);
     }
 
     public static function send(Response $res): void
     {
+        self::sendWith($res, true);
+    }
+
+    public static function sendWith(Response $res, bool $api): void
+    {
         http_response_code($res->status);
         header('Content-Type: ' . $res->contentType);
-        header('Access-Control-Allow-Origin: *');
-        header('Access-Control-Allow-Headers: Authorization, Content-Type');
-        header('Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS');
+        if ($api) {
+            header('Access-Control-Allow-Origin: *');
+            header('Access-Control-Allow-Headers: Authorization, Content-Type');
+            header('Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS');
+            header('Cache-Control: no-store');
+        } else {
+            header('X-Frame-Options: SAMEORIGIN');
+            header('Referrer-Policy: strict-origin-when-cross-origin');
+            if (!isset($res->headers['Cache-Control'])) header('Cache-Control: private, no-cache');
+        }
         header('X-Content-Type-Options: nosniff');
-        header('Cache-Control: no-store');
+        foreach ($res->headers as $name => $values) {
+            foreach ((array) $values as $v) header("$name: $v", false);
+        }
         echo $res->body;
     }
 }

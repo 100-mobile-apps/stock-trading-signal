@@ -6,6 +6,9 @@ namespace SignalLab;
 /** All HTTP routes. Mounted by public/index.php. */
 final class Api
 {
+    /** Price levels hidden from free users while a signal is live. Results stay free for everyone. */
+    public const LOCKED_FIELDS = ['signal_price', 'stop_loss', 'target1', 'target2', 'entry_price', 'live_stop', 'live_target1', 'live_target2'];
+
     public static function router(): Router
     {
         $r = new Router();
@@ -22,10 +25,11 @@ final class Api
 
         // ---------------------------------------------------------- auth
         $r->add('POST', '/auth/register', fn(Request $q) => Response::json(
-            Auth::register($q->str('email', 190), (string) ($q->body['password'] ?? ''), $q->str('name', 120), $q->ip), 201));
+            Auth::register($q->str('email', 190), (string) ($q->body['password'] ?? ''), $q->str('name', 120), $q->ip,
+                $q->str('referral_code', 16) ?: null, 'app'), 201));
         $r->add('POST', '/auth/login', fn(Request $q) => Response::json(
             Auth::login($q->str('email', 190), (string) ($q->body['password'] ?? ''), $q->ip)));
-        $r->add('POST', '/auth/google', fn(Request $q) => Response::json(Auth::google($q->str('id_token', 4096))));
+        $r->add('POST', '/auth/google', fn(Request $q) => Response::json(Auth::google($q->str('id_token', 4096), null, $q->str('referral_code', 16) ?: null, 'app')));
         $r->add('POST', '/auth/refresh', fn(Request $q) => Response::json(Auth::refresh($q->str('refresh_token', 128))));
         $r->add('POST', '/auth/logout', function (Request $q) {
             Auth::logout($q->str('refresh_token', 128));
@@ -67,7 +71,8 @@ final class Api
         // ---------------------------------------------------------- account
         $r->add('GET', '/me', function (Request $q) {
             $id = Auth::requireUser($q);
-            return Response::json(['user' => Auth::userPayload($id), 'settings' => self::settings($id), 'watchlist' => self::watchlist($id)]);
+            return Response::json(['user' => Auth::userPayload($id), 'settings' => self::settings($id), 'watchlist' => self::watchlist($id),
+                'billing_account_id' => Billing::obfuscatedId($id)]);
         });
         $r->add('PATCH', '/me', function (Request $q) {
             $id = Auth::requireUser($q);
@@ -154,13 +159,39 @@ final class Api
             $limit = max(1, min(200, $q->int('limit', 50)));
             $order = $status === 'closed' ? 'exit_time DESC, id DESC' : 'id DESC';
             $rows = Db::all('SELECT * FROM signals WHERE ' . implode(' AND ', $where) . " ORDER BY $order LIMIT $limit", $params);
-            return Response::json(array_map([self::class, 'signalPayload'], $rows));
+            $premium = Premium::isActive($id);
+            return Response::json(array_map(fn($row) => self::signalPayload($row, $premium), $rows));
         });
         $r->add('GET', '/signals/{id}', function (Request $q, array $p) {
-            Auth::requireUser($q);
+            $id = Auth::requireUser($q);
             $row = Db::one('SELECT * FROM signals WHERE id = ?', [(int) $p['id']]);
             if (!$row) throw new ApiError(404, 'not_found', 'Signal not found.');
-            return Response::json(self::signalPayload($row));
+            return Response::json(self::signalPayload($row, Premium::isActive($id)));
+        });
+
+        // ---------------------------------------------------------- premium & billing (Google Play)
+        $r->add('GET', '/plans', fn() => Response::json([
+            'enabled' => Settings::on('premium_enabled'),
+            'plans' => array_map([Plans::class, 'payload'], Plans::active()),
+            'features' => self::premiumFeatures(),
+        ]));
+        $r->add('GET', '/billing/status', fn(Request $q) => Response::json(Premium::status(Auth::requireUser($q))));
+        $r->add('POST', '/billing/google/verify', function (Request $q) {
+            $id = Auth::requireUser($q);
+            $token = $q->str('purchase_token', 1000);
+            if (strlen($token) < 10) throw new ApiError(422, 'invalid', 'Missing purchase token.');
+            return Response::json(Billing::googleVerify($id, $q->str('product_id', 100), $token));
+        });
+
+        // ---------------------------------------------------------- brokers & affiliate
+        $r->add('GET', '/brokers', function (Request $q) {
+            $id = Auth::requireUser($q);
+            return Response::json(['disclosure' => self::brokerDisclosure(),
+                'items' => array_map(fn($b) => Brokers::payload($b, $id), Brokers::active())]);
+        });
+        $r->add('GET', '/affiliate', function (Request $q) {
+            $id = Auth::requireUser($q);
+            return Response::json(Affiliates::summary($id) + ['program_url' => Urls::site('/affiliate')]);
         });
 
         // ---------------------------------------------------------- performance
@@ -224,6 +255,7 @@ final class Api
                 'scan' => Tracker::run(),
                 'mail' => Mailer::processQueue(),
                 'daily', 'weekly', 'monthly' => ['sent' => Reports::send($p['job'])],
+                'maintenance' => self::maintenance(),
                 default => throw new ApiError(404, 'not_found', 'Unknown job.'),
             });
         });
@@ -252,10 +284,41 @@ final class Api
         return array_column(Db::all('SELECT symbol FROM watchlist WHERE user_id = ? ORDER BY position, symbol', [$userId]), 'symbol');
     }
 
-    public static function signalPayload(array $r): array
+    /** Daily housekeeping: release held commissions, re-check Play subscriptions. */
+    public static function maintenance(): array
     {
-        $f = fn($k) => $r[$k] === null ? null : (float) $r[$k];
+        return ['commissions_approved' => Affiliates::approveDue(), 'google_rechecked' => Billing::googleRecheckDue(),
+            'sessions_purged' => Session::purgeExpired()];
+    }
+
+    public static function premiumFeatures(): array
+    {
         return [
+            'Exact entry, stop-loss and both targets on every live signal',
+            'Full levels in push and email alerts the moment a signal fires',
+            'Live stop updates when Target 1 is hit',
+            'Supports independent development of the app',
+        ];
+    }
+
+    public static function brokerDisclosure(): string
+    {
+        return 'We may earn a commission if you open an account through these links, at no extra cost to you. '
+            . 'This is not a recommendation. Compare fees and check the broker is regulated where you live. Trading involves risk.';
+    }
+
+    /** True for signals whose trade levels are still actionable (and so locked for free users). */
+    public static function isLive(array $r): bool
+    {
+        return $r['kind'] === 'trade' && in_array($r['status'], ['pending', 'open'], true);
+    }
+
+    public static function signalPayload(array $r, bool $premium = true): array
+    {
+        $locked = !$premium && self::isLive($r);
+        $f = fn($k) => $r[$k] === null || ($locked && in_array($k, self::LOCKED_FIELDS, true)) ? null : (float) $r[$k];
+        return [
+            'locked' => $locked,
             'id' => (int) $r['id'],
             'symbol' => $r['symbol'],
             'tf' => $r['tf'],

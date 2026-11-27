@@ -11,7 +11,6 @@ final class Push
 {
     /** Tests can capture messages instead of calling Google. */
     public static $transport = null;
-    private static ?array $token = null;
 
     public static function toUser(int $userId, string $title, string $body, array $data = []): bool
     {
@@ -58,47 +57,12 @@ final class Push
 
     private static function serviceAccount(): ?array
     {
-        $file = (string) Config::get('fcm.service_account_file', '');
-        if ($file === '' || !is_file($file)) return null;
-        $sa = json_decode((string) file_get_contents($file), true);
-        return is_array($sa) && isset($sa['private_key'], $sa['client_email'], $sa['project_id']) ? $sa : null;
+        $sa = GoogleAuth::serviceAccount((string) Config::get('fcm.service_account_file', ''));
+        return $sa && isset($sa['project_id']) ? $sa : null;
     }
 
     private static function accessToken(array $sa): ?string
     {
-        if (self::$token && self::$token['exp'] > time() + 60) return self::$token['value'];
-        $cache = __DIR__ . '/../storage/fcm_token.json';
-        if (is_file($cache)) {
-            $c = json_decode((string) file_get_contents($cache), true);
-            if (is_array($c) && ($c['exp'] ?? 0) > time() + 60) {
-                self::$token = $c;
-                return $c['value'];
-            }
-        }
-        $now = time();
-        $header = Jwt::b64(json_encode(['alg' => 'RS256', 'typ' => 'JWT']));
-        $claims = Jwt::b64(json_encode([
-            'iss' => $sa['client_email'],
-            'scope' => 'https://www.googleapis.com/auth/firebase.messaging',
-            'aud' => $sa['token_uri'] ?? 'https://oauth2.googleapis.com/token',
-            'iat' => $now,
-            'exp' => $now + 3600,
-        ]));
-        $sig = '';
-        if (!openssl_sign("$header.$claims", $sig, $sa['private_key'], OPENSSL_ALGO_SHA256)) return null;
-        $assertion = "$header.$claims." . Jwt::b64($sig);
-        $res = HttpClient::post(
-            $sa['token_uri'] ?? 'https://oauth2.googleapis.com/token',
-            http_build_query(['grant_type' => 'urn:ietf:params:oauth:grant-type:jwt-bearer', 'assertion' => $assertion]),
-            ['Content-Type: application/x-www-form-urlencoded']
-        );
-        $j = json_decode($res['body'], true);
-        if ($res['status'] !== 200 || empty($j['access_token'])) {
-            error_log('[SignalLab] FCM auth failed: ' . substr($res['body'], 0, 300));
-            return null;
-        }
-        self::$token = ['value' => $j['access_token'], 'exp' => $now + (int) ($j['expires_in'] ?? 3600)];
-        @file_put_contents($cache, json_encode(self::$token));
-        return self::$token['value'];
+        return GoogleAuth::token($sa, 'https://www.googleapis.com/auth/firebase.messaging');
     }
 }
